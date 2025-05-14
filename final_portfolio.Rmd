@@ -1,0 +1,709 @@
+---
+title: "Data Visualization: Final Portfolio"
+author: "Matt Miller"
+date: "12/18/2021"
+output: html_document
+classoption: landscape
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(tidytext)
+library(extrafont)
+library(GGally)
+library(RColorBrewer)
+library(ggrepel)
+library(janitor)
+library(scales)
+library(ggthemes)
+library(hrbrthemes)
+library(ggridges)
+library(data.table)
+library(scales)
+library(socviz)
+library(usmap)
+library(maps)
+library(statebins)
+library(plotly)
+
+setwd("C:/Users/16186/OneDrive - Johns Hopkins/Data Viz/homework")
+
+#Much of the variable data is missing for Puerto Rico. It is excluded from this analysis. Create unique census tract code with state, county and tract
+outcomes <- read_csv("tract_outcomes_simple.csv") %>%
+  mutate(
+  state_new = formatC(state, width = 2, flag = "0"),
+  county_new = formatC(county, width = 3, flag = "0"),
+  state_county = paste0(state_new, county_new),
+  unique_tract = paste0(state_new, ".", county_new, ".", tract)
+)  %>% filter(state != 72)
+
+covariates <- read_csv("tract_covariates.csv") %>% 
+  mutate(
+  state_new = formatC(state, width = 2, flag = "0"),
+  county_new = formatC(county, width = 3, flag = "0"),
+  state_county = paste0(state_new, county_new),
+  unique_tract = paste0(state_new, ".", county_new, ".", tract)
+) %>%
+  filter(state != 72) %>%
+  select(unique_tract, singleparent_share2010, foreign_share2010, frac_coll_plus2010, poor_share2010, share_white2010, share_black2010, share_hisp2010, share_asian2010, traveltime15_2010)
+
+dat <- outcomes %>%
+  left_join(covariates, by = c("unique_tract" = "unique_tract"))
+
+
+#I would like to plot by US census regions instead of state. Because of this, I need to associate state codes with census region. First, I create a tibble with division numbers from the following us census link: https://www2.census.gov/geo/pdfs/maps-data/maps/reference/us_regdiv.pdf
+
+div_num <- c(1, 2, 3, 4, 5, 6, 7, 8, 9)
+
+div_name <- c("New England", "Middle Atlantic", "East North Central", "West North Central",
+              "South Atlantic", "East South Central", "West South Central", "Mountain",
+              "Pacific")
+
+div_region <- c("Northeast", "Northeast", "Midwest", "Midwest", "South", "South", "South",
+                "West", "West")
+
+div_tib <- data.frame(div_num, div_name, div_region) %>% as_tibble()
+
+#To associate division number with state fips code, it's necessary to join on another census xlxs document that can be found here: https://www2.census.gov/programs-surveys/popest/geographies/2016/state-geocodes-v2016.xls
+
+#I converted the file to csv and filtered out the summary rows (i.e where there weren't associations between state and division)
+
+geo_codes <- read_csv("geocodes_2016.csv") %>% 
+              clean_names(.) %>% 
+              filter(state_fips != "00") %>%
+              left_join(div_tib, by = c("division" = "div_num")) %>%
+              mutate(state_fips = formatC(state_fips, width = 2, flag = "0"))
+
+#Get abbreviated state names
+state_names <- fread('https://www2.census.gov/geo/docs/reference/state.txt') %>%
+                tibble(.) %>%
+                rename(state = STATE,
+                       state_name = STUSAB) %>%
+                mutate(state_num = formatC(state, width = 2, flag = "0")) %>%
+                select(state_num, state_name)
+
+county_names <- us_map(regions = "counties") %>%
+  tibble(.) %>%
+  mutate(county_name = paste0(county, ",", abbr)) %>%
+  select(fips, county_name) %>%
+  rename(County = county_name) %>%
+  distinct(.)
+
+theme_set(theme_light())
+
+
+
+
+```
+
+
+# Economic Mobility in the United States
+This set of ten visualizations explores economic mobility in the United States. It seeks to communicate how where you're from or what you look like might affect your chances of ending up in jail or earning more/less income than your parents.
+
+The research data presented below comes from two data sets distributed by Opportunity Insights, a non-partisan, not-for-profit organization located at Harvard University. 
+
+One data set reports predicted outcomes for incarceration and income percentile by U.S Census Tract. Predicted outcomes are a result of study participants born between 1978 and 1983. All participants were born at the 25th income percentile of national income. The study collected information on race and incarceration rates in 2010 for study participants. It collect information on race and income percentile in 2014-2015. Through this set of data, it's possible to draw insights on if rates of economic mobility vary based upon race and geographic location. [The data dictionary for this data set can be found here.](https://opportunityinsights.org/wp-content/uploads/2019/07/Codebook-for-Table-1.pdf).
+
+The second data set from Opportunity Insights is a collection of data from the U.S Census Bureau by U.S Census Tract. The collection is primarily a function of the Decennial Census and the American Community Survey. This data set allows researchers to draw insights regarding the neighborhood characteristics of U.S Census Tracts. [The data dictionary for this data set can be found here.](https://opportunityinsights.org/wp-content/uploads/2019/07/Codebook-for-Table-9.pdf)
+
+Finally, there are four other data sets used below that come from the U.S Census Bureau and the usmap R package. These data sets are meant to provide meaningful names for U.S Counties, States, and U.S Census Regions.
+
+-[This is the data source of U.S Census Region Names](https://www2.census.gov/geo/pdfs/maps-data/maps/reference/us_regdiv.pdf)
+
+-[This data source ties U.S FIPS Codes with U.S Census Region Division Codes](https://www2.census.gov/programs-surveys/popest/geographies/2016/state-geocodes-v2016.xls)
+
+-[This data source holds U.S State Abbreviations and Names by FIPS Codes](https://www2.census.gov/geo/docs/reference/state.txt)
+
+-[U.S County Names come from the usmaps R package](https://cran.r-project.org/web/packages/usmap/usmap.pdf)
+
+
+## Incarceration
+The first variable this exploration will cover is incarceration. The plot below shows the distribution in incarceration of study participants by U.S Census Region and Race for all U.S Census tracts. Please note that the range is limited at 2 standard deviations from the mean incarceration for each U.S Census Region.
+
+
+```{r ridgeline, echo=FALSE, message=FALSE, out.height="100%", out.width="100%"}
+
+dat_density <- dat %>%
+  left_join(geo_codes, by = c("state_new" = "state_fips")) %>%
+  left_join(state_names, by = c("state_new" = "state_num")) %>%
+  select(div_region, jail_black_pooled_p25, jail_white_pooled_p25, jail_hisp_pooled_p25) %>%
+  filter(jail_black_pooled_p25 > 0 & jail_white_pooled_p25 > 0 & jail_hisp_pooled_p25 > 0) %>%
+  rename("Black" = jail_black_pooled_p25, "White" = jail_white_pooled_p25, "Latino" = jail_hisp_pooled_p25) %>%
+  pivot_longer(cols = c(-div_region), names_to = "race", values_to = "jail_prop") %>%
+  group_by(div_region, race) %>%
+  summarize(jail_mean = mean(jail_prop, na.rm = TRUE),
+            jail_sd = sd(jail_prop, na.rm = TRUE))
+
+
+ggplot(dat_density, aes(x = jail_mean, y = reorder(div_region, jail_mean))) +
+  geom_pointrange(mapping = aes(xmin = if_else(jail_mean - (jail_sd * 2) < 0, 0, jail_mean - (jail_sd * 2)), 
+                                xmax = jail_mean + (jail_sd * 2), color = div_region)) +
+  facet_wrap(~race, ncol = 1) +
+  theme(
+    panel.grid.major = element_blank(),
+    axis.title.y = element_blank(),
+    legend.position = "top",
+    strip.text.x = element_text(
+          size = 14, face = "bold"
+        ),
+        axis.text.x = element_text(
+          face = "bold", size = 9, hjust = 0.9, angle = 45
+        ),
+        axis.text.y = element_text(
+          face ="bold", size = 9
+  )
+    
+  ) +
+  scale_x_continuous(labels = scales::percent, breaks = scales::pretty_breaks(n = 8)) +
+  labs(
+    x = "Incarceration Proportion (%)",
+    title = "Range of Incarceration Proportion",
+    subtitle = "Aggregated by U.S Census Region and Race for U.S Census Tracts",
+    caption = "*Range max values are two standard deviations away from mean incarceration for each U.S Census Region.
+    *Points in visualization represent the mean incarceration proportion for each U.S Census Region and Race.
+    *U.S Census Tracts are statistical subdivisions of a county or equivalent entity.",
+    color = "U.S Census Region"
+  )
+
+
+```
+
+
+
+The next visualization is interactive. It shows the average incarceration proportion by state for all races in the study.
+
+
+```{r state_map, echo=FALSE,warning=FALSE, message=FALSE, out.height="100%", out.width="100%"}
+
+dat_state <- dat %>%
+        group_by(state_new) %>%
+        summarize(
+          average_jail = mean(jail_pooled_pooled_p25, na.rm = TRUE)
+        )
+
+state_map <- us_map(regions = "states") %>%
+  rename(State = full) %>%
+  left_join(dat_state, by = c("fips" = "state_new"))
+
+p <- ggplot(data = state_map, mapping = aes(x = x, y = y,
+                                            label = State, text = paste0("Avg Incarceration",":", " ", percent(average_jail, accuracy = 0.01)),
+                                            group = group, fill = average_jail))
+
+p1 <- p + geom_polygon(color = "gray90") + 
+  labs(title = "Average Incarceration Proportion by State") + 
+  coord_equal() + 
+  scale_fill_viridis_c(name = "Incarceration Proportion",labels = scales::percent) +
+  theme(plot.title = element_text(size = rel(2), face = "bold")
+        ) +
+  theme_map()
+
+ggplotly(p1, tooltip = c("label", "text")) %>%
+  layout(title = list(text = "Average Incarceration Proportion by State", 
+                      font = list(size = 20)))
+
+```
+
+
+## Income
+Next, this exploration will cover the income percentile associated with study participants. The following visualization shows how the income percentile of study participants varies by U.S Census Region and Race.
+
+
+```{r income_dist_race, echo=FALSE, message=FALSE, out.height="100%", out.width="100%"}
+
+dat_dist <- dat %>%
+        left_join(geo_codes, by = c("state_new" = "state_fips")) %>%
+        left_join(state_names, by = c("state_new" = "state_num")) %>%
+        rename(
+          "state_abrv" = state_name,
+          "state_name" = name
+             )
+
+income_dist <- dat_dist %>% select(unique_tract, kfr_black_pooled_p25, kfr_white_pooled_p25, kfr_hisp_pooled_p25, div_region, div_name) %>%
+          rename(
+            "Black_Income" = kfr_black_pooled_p25,
+            "White_Income" = kfr_white_pooled_p25,
+            "Latino_Income" = kfr_hisp_pooled_p25
+                ) %>%
+          gather(., key = "var", value = "percent", -unique_tract, -div_region, -div_name) %>%
+          separate(., col = var, into = c("Race", "type")) %>% 
+          spread(., key = type, value = percent) %>%
+          filter(Income > 0 & Income <= 1.0)
+
+p <- ggplot(data = income_dist, aes(x = div_region, y = Income))
+
+p + geom_violin(aes(fill = div_region), width = 1) + geom_boxplot(width=0.4, color="white", alpha=0.5, outlier.shape = NA) + facet_wrap(~Race, ncol = 4) +
+  scale_y_continuous(labels = scales::percent) +
+    labs(
+      fill = "Race",
+       y = "Income Percentile (%)",
+       title = "Distribution of Income Percentile",
+       subtitle = "Data Aggregated by U.S Census Region and Race for U.S Census Tracts",
+       caption = "*U.S Census Tracts are statistical subdivisons of a county or equivalent entity.",
+       color = "U.S Census Region"
+       ) +
+  theme(legend.position = "top",
+        axis.title.x = element_blank(),
+        strip.text.x = element_text(
+          size = 14, face = "bold"
+        ),
+        axis.text.x = element_text(
+          face = "bold", size = 9, angle = 60, vjust = 0.6, hjust = 0.5
+        ),
+        axis.text.y = element_text(
+          face ="bold", size = 9
+        )) 
+```
+
+
+
+The next visualization is interactive. It shows the average income percentile by county for all races in the study.
+
+
+```{r county_map, echo=FALSE, message=FALSE, out.height="100%", out.width="100%"}
+
+#get county data
+county_data <- county_map
+
+county_names <- us_map(regions = "counties") %>%
+  tibble(.) %>%
+  mutate(county_name = paste0(county, ",", abbr)) %>%
+  select(fips, county_name) %>%
+  rename(County = county_name) %>%
+  distinct(.)
+
+#Join division names with outcome tibble via us census state code
+
+dat_county <- dat %>%
+  add_row(state_county = c("02270", "51515", "15005", "46113")) %>%
+  left_join(county_names, by = c("state_county" = "fips")) %>%
+        group_by(state_county, County) %>%
+        summarize(
+          average_income = mean(kfr_pooled_pooled_p25, na.rm = TRUE),
+          average_jail = mean(jail_pooled_pooled_p25, na.rm = TRUE)
+        )
+
+county_full <- left_join(dat_county, county_data,  by = c("state_county" = "id"))
+
+p <- ggplot(data = county_full,
+            mapping = aes(x = long, y = lat,
+                          label = County, text = paste0("Avg Income Percentile:", " ", percent(average_income, accuracy = 0.01)),
+                          fill = average_income,
+                          group = group))
+
+p1 <- p + geom_polygon(color = "gray90", size = 0.05) + 
+  labs(title = "Average Income Percentile by U.S County") + 
+  coord_equal() + 
+  theme_map() + 
+  labs(
+    x = "*Gray counties do not have sufficient data to calculate average income percentile"
+  ) +
+  scale_fill_viridis_c(name = "Income Percentile",labels = scales::percent) +
+  theme(plot.title = element_text(size = rel(2), face = "bold"), 
+        legend.title = element_text(face = "bold"),
+        plot.caption = element_text(face = "bold"),
+        axis.title.x = element_text(size = 8))
+
+
+ggplotly(p1, tooltip = c("label", "text")) %>%
+  layout(title = list(text = "Average Income Percentile by U.S County", 
+                      font = list(size = 20))
+  )
+
+```
+
+
+Next, we view the average income percentile by state and race for study participants in each U.S Census region. The median for each census region is denoted in red for comparative purposes.
+
+
+```{r average_income_perc, echo=FALSE, message=FALSE,out.width="100%", fig.height=9, warning=FALSE}
+
+average_state <- dat %>%
+  left_join(geo_codes, by = c("state_new" = "state_fips")) %>%
+  left_join(state_names, by = c("state_new" = "state_num")) %>%
+  select(unique_tract, div_region, state_name, kfr_black_pooled_p25, kfr_hisp_pooled_p25, kfr_white_pooled_p25) %>%
+  group_by(div_region, state_name) %>% 
+        summarize(
+           Black = mean(kfr_black_pooled_p25, na.rm = TRUE),
+           White = mean(kfr_white_pooled_p25, na.rm = TRUE),
+           Latino = mean(kfr_hisp_pooled_p25, na.rm = TRUE)
+        ) %>%
+  pivot_longer(cols = c(-div_region, -state_name), names_to = "Race", values_to = "Income") %>%
+  ungroup(.) %>%
+  mutate(state_name = fct_reorder(state_name, Income))
+  
+
+median_check <- average_state %>%
+  group_by(div_region) %>%
+  summarize(
+    value = median(Income, na.rm = TRUE)
+  )
+
+jitter <- position_jitter(height = .10, seed = 114)
+
+
+p <- ggplot(data = average_state, mapping = aes(x = Income, 
+                                                y = state_name, 
+                                                color = Race))
+
+p1 <- p + geom_point(size=1.75, position = jitter) + facet_wrap(~div_region, ncol = 1,  scales = "free_x") +
+  geom_vline(data = median_check, aes(xintercept = value, group = div_region), linetype = "dashed", color = "red") +
+  coord_flip() +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 5), labels = scales::percent) +
+  labs(
+    color = "Race",
+    title = "Average Income Percentile",
+    subtitle = "Aggregated by U.S Census Region, State, and Race for U.S Census Tracts",
+    x = "U.S Income Percentile",
+    caption = "*Vermont does not have sufficient data to for Black/Latino Income Percentile calculations
+    *U.S Census Tracts are statistical subdivisons of a county or equivalent entity.
+    *Red line represents median U.S Income Percentile for each Census Region
+    *Small amount of random noise introduced to avoid overplotting"
+    
+  ) +
+  theme(
+    legend.position = "top",
+    axis.title.x = element_blank(),
+    strip.text.x = element_text(
+      size = 14, face = "bold"
+    ),
+    axis.text.x = element_text(
+      face = "bold", size = 9
+    ),
+    axis.text.y = element_text(
+      face ="bold", size = 9
+    )
+)
+
+p1
+
+
+
+```
+
+
+Finally, we view both variables (income and incarceration) together on a single scatter plot. Information is aggregated by U.S County and Race for comparative purposes. Three counties with high incarceration are noted directly in the plot.
+
+
+```{r income_jail, echo=FALSE, message=FALSE, out.height="100%", out.width="100%"}
+
+dat_income_jail <- dat %>%
+  left_join(geo_codes, by = c("state_new" = "state_fips")) %>%
+  left_join(state_names, by = c("state_new" = "state_num")) %>%
+  left_join(county_names, by = c("state_county" = "fips")) %>%
+  select(unique_tract, County, div_region, kfr_black_pooled_p25, kfr_white_pooled_p25, kfr_hisp_pooled_p25, jail_black_pooled_p25, jail_white_pooled_p25, jail_hisp_pooled_p25) %>%
+          rename(
+            "Black_Income" = kfr_black_pooled_p25,
+            "White_Income" = kfr_white_pooled_p25,
+            "Latino_Income" = kfr_hisp_pooled_p25,
+            "Black_Jail" = jail_black_pooled_p25,
+            "White_Jail" = jail_white_pooled_p25,
+            "Latino_Jail" = jail_hisp_pooled_p25
+                ) %>%
+  gather(., key = "var", value = "percent", -unique_tract, -County, -div_region) %>%
+  separate(., col = var, into = c("Race", "type")) %>% 
+  spread(., key = type, value = percent) %>%
+  filter(Income > 0, Jail > 0) %>%
+  group_by(div_region, County, Race) %>%
+  summarize(
+    Income = mean(Income, na.rm = TRUE),
+    Jail = mean(Jail, na.rm = TRUE)
+  )
+
+p <- ggplot(dat_income_jail, aes(x = Income, y = Jail, color = Race))
+
+p + geom_point(alpha=0.5)  + scale_x_continuous(labels = percent, breaks = scales::pretty_breaks(n = 8)) +
+scale_y_continuous(labels = percent,  breaks = scales::pretty_breaks(n = 8)) +
+  theme(
+    legend.position = "top"
+  ) +
+  labs(
+    color = "Race",
+    title = "Average Incarceration Proportion vs. Average Income Percentile",
+    subtitle = "Aggregated by U.S County and Race for U.S Census Tracts",
+    caption = "*U.S Census Tracts are statistical subdivisons of a county or equivalent entity.",
+    y = "Incarceration Proportion (%)",
+    x = "Income Percentile (%)"
+  ) +
+  geom_smooth(color = "orange", se = FALSE) +
+  annotate(geom = "curve", x = .67, y = .30, xend = .6025, yend = .32,
+           curvature = .3, arrow = arrow(length = unit(2, "mm"))) +
+  annotate(geom = "text", x = .68, y = .29, label = "North Slope Burough, AK",
+           hjust = "center", size = 3) +
+  annotate(geom = "segment", x = .310 + .05, y = .393, xend = .312, yend = .393, arrow = arrow(length = unit(2, "mm"))) +
+  annotate(geom = "text", x = .41, y = .393, label = "Custer County, OK", hjust = "rigth", size = 3) +
+  annotate(geom = "curve", x = .35, y = .335, yend = .366, xend = .306, curvature = .3, arrow = arrow(length = unit(2, "mm"))) +
+  annotate(geom = "text", x = .425, y = .335, label = "Union County, KY", hjust = "right", size = 3) +
+  theme(
+    axis.text.x = element_text(
+          face = "bold", size = 9),
+        axis.text.y = element_text(
+          face ="bold", size = 9
+    )
+  )
+
+```
+
+
+## Comparing Incarceration and Income with Community Characteristics
+The following set of visualizations uses data from the Decennial Census and American Community Survey to track how neighborhood characteristics within U.S Census tracts might influence income and incarceration for the study participants.
+
+The first visualization is a correlogram of the key variables that help define both data sets. Income shows interesting correlation patterns with four characteristics below. Incarceration does not share as strong of a relationship with the characteristics relative to income, so income is explored exclusively going forward. Definitions for each of the variables is provided below:
+
+**Income** - Mean household income rank for children whose parents were at the 25th percentile of the national income distribution. Incomes for children were measured as mean earnings in 2014-2015 when they were between the ages 31-37. Household income is defined as the sum of own and spouse’s income.
+
+**Jail** - Fraction of children born in 1978-1983 birth cohorts with parents at the 25th percentile of the national income distribution who were incarcerated on April 1st, 2010. Incarceration is defined as residing in a federal detention center, federal prison, state prison, local jail, residential correctional facility, military jail, or juvenile correctional facility.
+
+**White** - Racial Shares for Whites in the decennial Census. All races (except Latino) exclude Hispanics and Latinos.
+
+**Latino** - Racial Shares for Latinos in the decennial Census. All races (except Latino) exclude Hispanics and Latinos.
+
+**Black** - Racial Shares for Blacks in the decennial Census. All races (except Latino) exclude Hispanics and Latinos.
+
+**Immigrant** - Number of foreign born residents in the 2010 Census divided by the sum of native and foreign born residents. Obtained from the ACS 2006-2010.
+
+**College** - Number of people aged 25 or older who have a bachelor's degree, master's degree, professional school degree, or doctorate degree, divided by the total number of people aged 25 or older in a tract. We use the 2006-2010 ACS to obtain the estimate for 2010.
+
+**Single Parent** - The number of households with females heads (and no husband present) or male heads (and no wife present) with own children under 18 years old present divided by the total number of households with own children present (1990 and 2000
+estimates are from the decennial Census, and the 2010 estimate is from the 2006-2010 estimate).
+
+**Poverty** - Share of individuals in the tract below the federal poverty line, measured in the decennial Census of the relevant year for the 1990 and 2000 estimates, and measured in the 2006-2010 ACS for the 2010 estimate.
+
+**Commute** - Share of workers 16 years and over who do not work at home whose commute is shorter than 15 minutes. Measured in the 2006-2010 ACS
+
+
+``` {r correlogram, echo=FALSE, message=FALSE, out.height="100%", out.width="100%"}
+
+#Develop Correlation
+
+var_cor <- dat %>%
+  select(traveltime15_2010, poor_share2010, singleparent_share2010, frac_coll_plus2010, foreign_share2010, share_black2010, share_hisp2010, share_white2010, jail_pooled_pooled_p25, kfr_pooled_pooled_p25) %>%
+  rename('SingleParent' = singleparent_share2010, 'Immigrant' = foreign_share2010, 'Poverty' = poor_share2010, 'Jail' = jail_pooled_pooled_p25, 'Black' = share_black2010, 'White' = share_white2010, 'Latino' = share_hisp2010, 'Commute' = traveltime15_2010, 'College' = frac_coll_plus2010, 'Income' = kfr_pooled_pooled_p25)
+
+
+ggcorr(var_cor, method = c("na.or.complete", "pearson"), label = TRUE, label_alpha = TRUE, hjust = .8, layout.exp = 2, low = "#414487FF", mid = "white", high = "#FDE725FF") +
+  labs(title = "Correlogram of Key Dataset Variables",
+       caption = "*Correlation coefficient measures the strength of the relationship between two variables.
+       *Explanation of variables is provided in text prior to this plot") +
+  guides(fill = guide_legend(title = "Correlation Coefficient")) +
+  annotate(geom = "rect", xmin = 3.25, xmax = 5.45, ymin = 2.7, ymax = 3.25, alpha = 0.2, color = "red") +
+  annotate(geom = "text", x = 3.75, y = 5, label = "High Negative \n Correlation with Income", hjust = "right", size = 2.75) +
+  annotate(geom = "segment", x = 1.5 , y = 4.6, xend = 3.475, yend = 3.4, arrow = arrow(length = unit(2, "mm"))) +
+  annotate(geom = "rect", xmin = 7.25, xmax = 8.25, ymin = 5.75, ymax = 6.25, alpha = 0.2, color = "red") +
+  annotate(geom = "rect", xmin = 8.20, xmax = 9.25, ymin = 6.75, ymax = 7.25, alpha = 0.2, color = "red") +
+  annotate(geom = "rect", xmin = 9.25, xmax = 10.25, ymin = 7.75, ymax = 8.25, alpha = 0.2, color = "red") +
+  annotate(geom = "text", x = 7, y = 7.75, label = "Wide Variability in Correlation \n among Racial Density with Income", hjust = "right", size = 2.75) +
+  annotate(geom = "segment", x = 7 , y = 7.4, xend = 7.25, yend = 6.35, arrow = arrow(length = unit(2, "mm"))) +
+  annotate(geom = "segment", x = 7 , y = 7.4, xend = 8.20, yend = 7.15, arrow = arrow(length = unit(2, "mm"))) +
+  annotate(geom = "segment", x = 7 , y = 7.4, xend = 9.20, yend = 8.05, arrow = arrow(length = unit(2, "mm")))
+
+```
+
+Given the high correlation between the Single Parent variable and income, we'll take a closer look at how it varies. The next visualization shows the average prooportion of single parent households by state and U.S Census region. The median single parent household proportion is denoted in red for comparative purposes.
+
+
+
+``` {r average_single_parent, echo=FALSE, message=FALSE, out.width="100%", fig.height = 7}
+
+dat_loli <- dat %>%
+  left_join(geo_codes, by = c("state_new" = "state_fips")) %>%
+  left_join(state_names, by = c("state_new" = "state_num")) %>%
+  select(unique_tract, div_region, state_name, singleparent_share2010) %>%
+  group_by(div_region, state_name) %>%
+  summarize(avg_single_parent = mean(singleparent_share2010, na.rm = TRUE)) %>%
+  ungroup(.) %>%
+  mutate(state_name = fct_reorder(state_name, avg_single_parent))
+
+median_check_2 <- dat_loli %>%
+  group_by(div_region) %>%
+  summarize(
+    value = median(avg_single_parent, na.rm = TRUE)
+  )
+
+p <- ggplot(dat_loli, aes(x = avg_single_parent, y = state_name))
+
+p + geom_segment(aes(x=state_name, xend=state_name, y = 0, yend=avg_single_parent), color = "grey") +
+  facet_wrap(~div_region, ncol = 1, scales = "free_x") +
+  geom_hline(data = median_check_2, aes(yintercept = value, group = div_region), linetype = "dashed", color = "red") +
+  geom_point(aes(x=state_name, y = avg_single_parent, color = div_region), size = 2) +
+  scale_y_continuous(labels = scales::percent, breaks = scales::pretty_breaks(n = 5)) +
+  labs(
+    color = "U.S Census Region",
+    title = "Average Proportion of Single Parent Households",
+    subtitle = "Aggregated by U.S Census Region and State for U.S Census Tracts",
+    caption = "*Red line represents median Proportion of Single Parent Households for each Census Region.
+    *U.S Census Tracts are statistical subdivisons of a county or equivalent entity."
+  ) +
+  theme(
+    axis.title.x = element_blank(),
+    legend.position = "none",
+    strip.text.x = element_text(
+      size = 14, face = "bold"
+    ),
+    axis.text.x = element_text(
+      face = "bold", size = 9
+    ),
+    axis.text.y = element_text(
+      face ="bold", size = 9
+    )
+  ) +
+  ylab("Single Parent Households (%)")
+  
+
+
+```
+
+
+The next visualization directly compares the income percentile with the average proportion of single parent households by race and state. Outliers for both variables are labeled for each race. In this case, an outlier is more than two standard deviations away from the mean of each variable for each race.
+
+
+
+``` {r scatter_singe_income, echo=FALSE, message=FALSE, fig.height= 7, out.width="100%"}
+
+dat_scatter <- dat %>%
+        left_join(geo_codes, by = c("state_new" = "state_fips")) %>%
+        left_join(state_names, by = c("state_new" = "state_num")) %>%
+        rename(
+          "state_abrv" = state_name,
+          "state_name" = name
+             )
+
+single_jail_income <- dat_scatter %>% select(unique_tract, kfr_black_pooled_p25, kfr_white_pooled_p25, kfr_hisp_pooled_p25, jail_black_pooled_p25, jail_white_pooled_p25, jail_hisp_pooled_p25, singleparent_share2010, div_region, state_abrv) %>%
+          rename(
+            "Black_Income" = kfr_black_pooled_p25,
+            "White_Income" = kfr_white_pooled_p25,
+            "Latino_Income" = kfr_hisp_pooled_p25,
+            "Black_Jail" = jail_black_pooled_p25,
+            "White_Jail" = jail_white_pooled_p25,
+            "Latino_Jail" = jail_hisp_pooled_p25
+                ) %>%
+          gather(., key = "var", value = "percent", -unique_tract, -div_region, -state_abrv, -singleparent_share2010) %>%
+          separate(., col = var, into = c("Race", "type")) %>% 
+          spread(., key = type, value = percent) %>%
+          filter(Income > 0, Jail > 0) %>%
+          group_by(div_region, state_abrv, Race) %>%
+          summarize(
+            average_single = mean(singleparent_share2010, na.rm = TRUE),
+            average_jail = mean(Jail, na.rm = TRUE),
+            average_income = mean(Income, na.rm = TRUE)
+          )
+
+race_stats <- single_jail_income %>%
+  group_by(Race) %>%
+  summarize(
+    average_single_race = mean(average_single),
+    average_jail_race = mean(average_jail),
+    average_income_race = mean(average_income),
+    sd_single_race = sd(average_single),
+    sd_jail_race = sd(average_jail),
+    sd_income_race = sd(average_income)
+  )
+
+single_jail_income <- single_jail_income %>%
+  left_join(race_stats, by = "Race") %>%
+  mutate(
+    outlier = if_else(
+      average_income > average_income_race + (2 * sd_income_race) |
+        average_single > average_single_race + (2 * sd_single_race)|
+      average_income < average_income_race - (2 * sd_income_race) |
+        average_single < average_single_race - (2 * sd_single_race),
+      TRUE, FALSE
+    )
+)
+
+p <- ggplot(single_jail_income, aes(x = average_income, y = average_single, color = div_region, group = Race))
+
+p + geom_point() + facet_wrap(~ Race) + 
+  geom_text_repel(data = subset(single_jail_income, outlier == TRUE, seed = 105, label.padding = 0.40), 
+    aes(x = average_income, y = average_single, label = state_abrv), size = 2.5) +
+  scale_y_continuous(labels = scales::percent, breaks = scales::pretty_breaks(n = 5)) +
+  scale_x_continuous(labels = scales::percent, breaks = scales::pretty_breaks(n = 5)) +
+  labs(color = "U.S Census Region",
+       y = "Avg. Proportion of Single Parent Households (%)",
+       x = "Avg. Income Percentile (%)",
+       title = "Average Proportion of Single Parent Households vs. Average Income Percentile",
+       caption = "*States are labeled if they are more than two stanard deviations from the mean for either
+       Avg. Proportion of Single Parent Households or Avg. Income percentile for each Race.
+       *U.S Census Tracts are statistical subdivisons of a county or equivalent entity.",
+       subtitle = "Aggregated by State and Race for U.S Census Tracts"
+       ) +
+  theme(legend.position = "top",
+        strip.text.x = element_text(
+          size = 14, face = "bold"
+        ),
+        axis.text.x = element_text(
+          face = "bold", size = 9, angle = 60, vjust = 0.6, hjust = 0.5
+        ),
+        axis.text.y = element_text(
+          face ="bold", size = 9
+        )
+    )
+
+
+```
+
+
+The correlogram also showed a wide variability among racial share density in U.S Census Tracts and the income in those U.S Census Tracts. The visualization below explores the relationship in further detail. The income columns denote the income percentile for each race. The density rows denote the racial share density for each race. The two are placed on the same scatter plot to show differences in how Black, White, and Latino income vary given the density of Black, White, and Latino populations in U.S Census Tracts.
+
+
+``` {r concentration, echo=FALSE, message=FALSE, out.height="100%", out.width="100%"}
+
+dat_county_income <- dat %>%
+  select(unique_tract, county_new, kfr_black_pooled_p25, kfr_white_pooled_p25, kfr_hisp_pooled_p25) %>%
+  rename("Black Income_Income" = kfr_black_pooled_p25, "White Income_Income" = kfr_white_pooled_p25, "Latino Income_Income" = kfr_hisp_pooled_p25) %>%
+  pivot_longer(cols = c(-unique_tract, -county_new), names_to = "type", values_to = "income") %>%
+  separate(., col = type, sep = "_", into = c("race", "type"), extra = "merge") %>%
+  filter(income > 0) %>%
+  group_by(county_new, race) %>%
+  summarise(
+    income = mean(income, na.rm = TRUE)
+  )
+
+dat_county_prop <- dat %>%
+  select(unique_tract, county_new, share_white2010, share_black2010, share_hisp2010) %>%
+  rename("White Density_Prop" = share_white2010, "Black Density_Prop" = share_black2010, "Latino Density_prop" = share_hisp2010) %>%
+  pivot_longer(cols = c(-unique_tract, -county_new), names_to = "type", values_to = "prop") %>%
+  separate(., col = type, sep = "_", into = c("race", "type"), extra = "merge") %>%
+  filter(prop > 0) %>%
+  group_by(county_new, race) %>%
+  summarise(
+    prop = mean(prop, na.rm = TRUE)
+  )
+
+dat_prop <- dat_county_income %>%
+  left_join(dat_county_prop, by = "county_new") %>%
+  rename("Race_Income" = race.x, "Race_Prop" = race.y) %>%
+  na.omit(.)
+
+p <- ggplot(data = dat_prop, mapping = aes(x = prop, y = income))
+
+p + 
+  geom_point(alpha = 0.3)  + geom_smooth(method = "lm", color = "orange", se = FALSE)  + facet_grid(Race_Prop ~ Race_Income) +
+  scale_y_continuous(labels = scales::percent) +
+  scale_x_continuous(labels = scales::percent) +
+  labs(
+    x = "Racial Population Density (%)",
+    y = "Income Percentile (%)",
+    title = "Average Income Percentile vs. Average Racial Population Density",
+    subtitle = "Aggregated by U.S County and Race for U.S Census Tracts",
+    caption = "*Racial Population Density is a measure of each Race's proportion of the total county population.
+    *U.S Census Tracts are statistical subdivisons of a county or equivalent entity."
+  ) +
+  theme(
+    strip.text.x = element_text(
+          size = 10, face = "bold"
+        ),
+    strip.text.y = element_text(
+      size = 10, face = "bold"
+    ),
+        axis.text.x = element_text(
+          face = "bold", size = 9, angle = 90, vjust = 0, hjust = 0
+        ),
+        axis.text.y = element_text(
+          face ="bold", size = 9
+  )
+)
+
+
+```
